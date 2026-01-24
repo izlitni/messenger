@@ -1,32 +1,15 @@
 const CONFIG = { broker: "wss://broker.emqx.io:8084/mqtt", topic: "msg_fixed_v5" };
 let client;
 let user = JSON.parse(localStorage.getItem('user')) || null;
-
-// 1. Initialize Default Data (So tabs aren't empty)
 let myRooms = JSON.parse(localStorage.getItem('rooms')) || [];
-if (myRooms.length === 0) {
-    // Add a default "Welcome" chat if list is empty
-    myRooms.push({
-        id: 'welcome_bot',
-        name: 'Messenger Bot',
-        msgs: [{ from: 'bot', name: 'Bot', txt: 'Welcome to Messenger Ultra! Tap the + button to start.', type: 'text' }],
-        time: Date.now(),
-        isPub: false
-    });
-}
-
-// 2. Initialize Default Public Rooms (For Explore Tab)
 let publicRooms = {
     'global_lounge': { id: 'global_lounge', name: 'Global Lounge', isPub: true },
     'tech_talk': { id: 'tech_talk', name: 'Tech Talk', isPub: true }
 };
-
 let activeRoom = null;
 let mediaRecorder, audioChunks = [], isRecording = false;
 
 // --- INITIALIZATION ---
-
-// Wait for HTML to load
 document.addEventListener('DOMContentLoaded', () => {
     if (user) {
         init();
@@ -38,11 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function handleLogin() {
     const nameInput = document.getElementById('username-in');
     const name = nameInput.value.trim();
-    
-    if (!name) {
-        alert("Please enter a name");
-        return;
-    }
+    if (!name) return;
     
     user = { id: 'u_' + Math.random().toString(36).substr(2, 6), name: name };
     localStorage.setItem('user', JSON.stringify(user));
@@ -50,20 +29,35 @@ function handleLogin() {
 }
 
 function init() {
-    // Hide Login, Show Main
+    // Hide Login
     document.getElementById('login-layer').classList.add('hidden');
     document.getElementById('main-layer').classList.remove('hidden');
 
-    // Render All Tabs Immediately
+    // FORCE DEFAULT DATA IF MISSING
+    // Check if the 'welcome_bot' is already in the list
+    const botExists = myRooms.some(r => r.id === 'welcome_bot');
+    
+    if (!botExists) {
+        myRooms.push({
+            id: 'welcome_bot',
+            name: 'Messenger Bot',
+            msgs: [{ from: 'bot', name: 'Bot', txt: 'Welcome! This is a local chat bot. Tap + to create new rooms.', type: 'text' }],
+            time: Date.now(),
+            isPub: false
+        });
+        localStorage.setItem('rooms', JSON.stringify(myRooms));
+    }
+
+    // Initialize UI
     setupProfile();
     renderChats();
     renderExplore();
     
-    // Connect to Internet
+    // Connect to MQTT
     connect();
 }
 
-// --- CORE FUNCTIONS ---
+// --- UI RENDERERS ---
 
 function setupProfile() {
     if (!user) return;
@@ -76,7 +70,6 @@ function setupProfile() {
 function renderChats() {
     const list = document.getElementById('chats-list');
     const emptyState = document.getElementById('empty-state');
-    
     list.innerHTML = '';
     
     if (myRooms.length === 0) {
@@ -86,7 +79,7 @@ function renderChats() {
 
     emptyState.style.display = 'none';
     
-    // Sort by newest message
+    // Sort: Newest first
     myRooms.sort((a, b) => b.time - a.time).forEach(r => {
         const last = r.msgs[r.msgs.length - 1];
         let prevTxt = 'New chat';
@@ -112,19 +105,16 @@ function renderChats() {
 
 function renderExplore() {
     const list = document.getElementById('explore-list');
-    list.innerHTML = ''; // Clear current list
+    list.innerHTML = ''; 
 
-    // Loop through public rooms object
     Object.values(publicRooms).forEach(r => {
         const div = document.createElement('div');
         div.className = 'list-item';
         div.onclick = () => {
-            // Check if already joined
             if (!myRooms.find(mr => mr.id === r.id)) {
                 saveRoom({ ...r, msgs: [], time: Date.now(), isPub: true });
             }
             openChat(r.id);
-            // Switch tab visually to chats
             switchTab('chats', document.querySelector('.nav-btn'));
         };
         div.innerHTML = `
@@ -137,31 +127,21 @@ function renderExplore() {
     });
 }
 
-// --- NETWORK & MQTT ---
+// --- NETWORK ---
 
 function connect() {
-    console.log("Connecting to MQTT...");
     client = mqtt.connect(CONFIG.broker);
-    
     client.on('connect', () => {
-        console.log("Connected");
         document.getElementById('conn-status').innerText = "Online";
         document.getElementById('conn-status').classList.remove('offline');
-        
-        // Listen for new public rooms
         client.subscribe(`${CONFIG.topic}/pub`);
-        
-        // Listen to my chats
         myRooms.forEach(r => client.subscribe(`${CONFIG.topic}/room/${r.id}`));
-        
-        // Broadcast my public rooms
         setInterval(() => myRooms.filter(r => r.isPub).forEach(publishPub), 5000);
     });
 
     client.on('message', (t, m) => {
         const d = JSON.parse(m.toString());
         if (t.includes('/pub')) {
-            // Add new room to explore list if not exists
             if (!publicRooms[d.id]) {
                 publicRooms[d.id] = d;
                 renderExplore();
@@ -187,8 +167,6 @@ function openChat(rid) {
     document.getElementById('chat-room-name').innerText = activeRoom.name;
     const feed = document.getElementById('chat-feed');
     feed.innerHTML = '';
-    
-    // Render existing messages
     activeRoom.msgs.forEach(renderMsg);
     
     document.getElementById('chat-layer').classList.add('open');
@@ -198,7 +176,7 @@ function openChat(rid) {
 function closeChat() {
     document.getElementById('chat-layer').classList.remove('open');
     activeRoom = null;
-    renderChats(); // Update list to show latest message preview
+    renderChats(); 
 }
 
 function saveRoom(r) {
@@ -207,7 +185,6 @@ function saveRoom(r) {
         myRooms.push(r);
         if (client) client.subscribe(`${CONFIG.topic}/room/${r.id}`);
     } else {
-        // Update existing room
         myRooms[i] = r;
     }
     localStorage.setItem('rooms', JSON.stringify(myRooms));
@@ -224,8 +201,6 @@ function processMsg(rid, msg) {
         r.msgs.push(msg);
         r.time = Date.now();
         saveRoom(r);
-        
-        // If chat is open, render message
         if (activeRoom && activeRoom.id === rid) {
             renderMsg(msg);
             const feed = document.getElementById('chat-feed');
@@ -234,7 +209,7 @@ function processMsg(rid, msg) {
     }
 }
 
-// --- MESSAGING SENDING ---
+// --- ACTIONS ---
 
 document.getElementById('msg-input').addEventListener('keypress', function(e) {
     if(e.key === 'Enter') sendText();
@@ -243,12 +218,9 @@ document.getElementById('msg-input').addEventListener('keypress', function(e) {
 function sendText() {
     const txt = document.getElementById('msg-input').value.trim();
     if (!txt || !activeRoom) return;
-    
     const msg = { from: user.id, name: user.name, txt, type: 'text' };
     processMsg(activeRoom.id, msg);
-    
     if(client) client.publish(`${CONFIG.topic}/room/${activeRoom.id}`, JSON.stringify(msg));
-    
     document.getElementById('msg-input').value = '';
 }
 
@@ -262,8 +234,6 @@ function sendImage(inp) {
     };
     reader.readAsDataURL(inp.files[0]);
 }
-
-// --- VOICE ---
 
 async function recordVoice() {
     const btn = document.getElementById('mic-btn');
@@ -287,10 +257,7 @@ async function recordVoice() {
             };
             isRecording = true;
             btn.classList.add('recording');
-        } catch(e) { 
-            console.error(e);
-            alert('Microphone access denied or not available.'); 
-        }
+        } catch(e) { alert('Mic access denied'); }
     } else {
         mediaRecorder.stop();
         isRecording = false;
@@ -298,17 +265,15 @@ async function recordVoice() {
     }
 }
 
-// --- RENDER HELPERS ---
+// --- HELPERS ---
 
 function renderMsg(msg) {
     const isMe = msg.from === user.id;
     const d = document.createElement('div');
     d.className = `msg-row ${isMe ? 'sent' : 'received'}`;
-    
     let c = msg.txt;
     if (msg.type === 'img') c = `<img src="${msg.txt}" style="max-width:100%; border-radius:12px;">`;
     if (msg.type === 'audio') c = `<audio controls src="${msg.txt}"></audio>`;
-    
     d.innerHTML = `${!isMe ? `<div class="msg-meta">${msg.name}</div>` : ''}<div class="bubble">${c}</div>`;
     document.getElementById('chat-feed').appendChild(d);
 }
@@ -319,15 +284,11 @@ function generateGradient(str) {
     return `linear-gradient(135deg, hsl(${hash % 360}, 70%, 50%), hsl(${(hash + 40) % 360}, 70%, 50%))`;
 }
 
-// --- UI NAVIGATION ---
-
 function switchTab(id, btn) {
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-    
     btn.classList.add('active');
     document.getElementById(`tab-${id}`).classList.add('active');
-    
     const titles = { 'chats': 'Chats', 'explore': 'Explore', 'profile': 'Settings' };
     document.getElementById('header-title').innerText = titles[id];
     document.getElementById('fab-btn').style.display = id === 'profile' ? 'none' : 'flex';
@@ -335,42 +296,7 @@ function switchTab(id, btn) {
 
 function openModal() { document.getElementById('create-modal').style.display = 'flex'; }
 function closeModal() { document.getElementById('create-modal').style.display = 'none'; }
-
-function createRoom() {
-    const name = document.getElementById('new-room-name').value;
-    const isPub = document.getElementById('is-public-check').checked;
-    if (!name) return;
-    
-    const r = { id: Math.random().toString(36).substr(2, 8), name, isPub, msgs: [], time: Date.now() };
-    saveRoom(r);
-    if (isPub) publishPub(r);
-    
-    closeModal();
-    openChat(r.id);
-}
-
-function joinRoom() {
-    const id = document.getElementById('join-id').value;
-    if (!id) return;
-    saveRoom({ id, name: "Joined Chat", isPub: false, msgs: [], time: Date.now() });
-    closeModal();
-    openChat(id);
-}
-
-function copyMyId() { navigator.clipboard.writeText(user.id); alert("Copied Your ID"); }
+function copyMyId() { navigator.clipboard.writeText(user.id); alert("Copied ID"); }
 function copyRoomId() { if(activeRoom) { navigator.clipboard.writeText(activeRoom.id); alert("Copied Room ID"); } }
-
-function clearHistory() { 
-    if (confirm('Delete all chats? This cannot be undone.')) { 
-        myRooms = []; 
-        localStorage.setItem('rooms', '[]'); 
-        location.reload(); 
-    } 
-}
-
-function logout() { 
-    if (confirm('Log out?')) { 
-        localStorage.clear(); 
-        location.reload(); 
-    } 
-}
+function clearHistory() { if (confirm('Clear all?')) { myRooms = []; localStorage.setItem('rooms', '[]'); location.reload(); } }
+function logout() { if (confirm('Log out?')) { localStorage.clear(); location.reload(); } }
