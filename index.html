@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Messenger Ultra (Fixed)</title>
+    <title>Messenger Ultra (Voice + Copy ID)</title>
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -148,6 +148,14 @@
             display: flex; align-items: center; padding: 0 10px; flex-shrink: 0;
         }
         .back-btn { padding: 10px; background: none; border: none; color: var(--primary); cursor: pointer; display: flex; align-items: center; gap: 5px; font-size: 16px; font-weight: 500; }
+        
+        /* New Copy Button Style */
+        .copy-btn { 
+            padding: 8px; background: rgba(0,0,0,0.05); border-radius: 8px; 
+            border: none; color: var(--primary); cursor: pointer; font-size: 11px; font-weight: 600;
+            display: flex; align-items: center; gap: 4px;
+        }
+        .copy-btn:active { background: rgba(0,0,0,0.1); }
 
         .chat-body {
             flex: 1; /* Takes remaining height */
@@ -178,6 +186,10 @@
         .chat-input { flex: 1; border: 1px solid var(--border); border-radius: 24px; padding: 12px 18px; font-size: 16px; background: white; }
         .send-icon-btn { color: var(--primary); background: none; border: none; padding: 5px; cursor: pointer; }
         .send-icon-btn svg { width: 28px; height: 28px; fill: currentColor; }
+        
+        /* Mic Recording Pulse */
+        .recording { color: var(--red); animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
 
         /* FAB */
         .fab {
@@ -270,12 +282,20 @@
                 Back
             </button>
             <div style="flex:1; text-align:center; font-weight:700;" id="chat-room-name">Name</div>
-            <div style="width:50px;"></div>
+            <!-- UPDATED: Copy ID Button -->
+            <button class="copy-btn" onclick="copyRoomId()">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                Copy ID
+            </button>
         </header>
         
         <div id="chat-feed" class="chat-body"></div>
         
         <div class="chat-footer">
+            <!-- UPDATED: Mic Button -->
+            <button class="send-icon-btn" id="mic-btn" onclick="recordVoice()">
+                <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 2.34 9 5v6c0 1.66 1.34 3 3 3zM17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+            </button>
             <button class="send-icon-btn" onclick="document.getElementById('file-in').click()">
                 <svg viewBox="0 0 24 24"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5a2.5 2.5 0 0 1 5 0v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5a2.5 2.5 0 0 0 5 0V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
             </button>
@@ -309,6 +329,7 @@
     let myRooms = JSON.parse(localStorage.getItem('rooms')) || [];
     let publicRooms = {};
     let activeRoom = null;
+    let mediaRecorder, audioChunks = [], isRecording = false;
 
     if(localStorage.getItem('user')) {
         user = JSON.parse(localStorage.getItem('user'));
@@ -412,6 +433,44 @@
         activeRoom = null;
         renderChats();
     }
+    
+    // --- NEW: Copy Room ID ---
+    function copyRoomId() {
+        if(!activeRoom) return;
+        navigator.clipboard.writeText(activeRoom.id);
+        alert('Copied Room ID: ' + activeRoom.id);
+    }
+
+    // --- NEW: Voice Message ---
+    async function recordVoice() {
+        const btn = document.getElementById('mic-btn');
+        if (!isRecording) {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder.start();
+                mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(audioChunks, { type: 'audio/webm' });
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const msg = { from: user.id, name: user.name, txt: reader.result, type: 'audio' };
+                        processMsg(activeRoom.id, msg);
+                        client.publish(`${CONFIG.topic}/room/${activeRoom.id}`, JSON.stringify(msg));
+                    };
+                    reader.readAsDataURL(blob);
+                    audioChunks = [];
+                    stream.getTracks().forEach(t => t.stop());
+                };
+                isRecording = true;
+                btn.classList.add('recording');
+            } catch(e) { alert('Mic access denied'); }
+        } else {
+            mediaRecorder.stop();
+            isRecording = false;
+            btn.classList.remove('recording');
+        }
+    }
 
     function sendText() {
         const txt = document.getElementById('msg-input').value.trim();
@@ -456,6 +515,7 @@
         d.className = `msg-row ${isMe ? 'sent' : 'received'}`;
         let c = msg.txt;
         if(msg.type === 'img') c = `<img src="${msg.txt}" style="max-width:100%; border-radius:12px;">`;
+        if(msg.type === 'audio') c = `<audio controls src="${msg.txt}" style="max-width:200px; height:32px;"></audio>`;
         d.innerHTML = `${!isMe ? `<div class="msg-meta">${msg.name}</div>` : ''}<div class="bubble">${c}</div>`;
         document.getElementById('chat-feed').appendChild(d);
     }
@@ -465,6 +525,12 @@
         l.innerHTML = '';
         myRooms.sort((a,b) => b.time - a.time).forEach(r => {
             const last = r.msgs[r.msgs.length-1];
+            let prevTxt = 'New chat';
+            if (last) {
+                if (last.type === 'img') prevTxt = '📷 Photo';
+                else if (last.type === 'audio') prevTxt = '🎤 Voice Message';
+                else prevTxt = last.txt;
+            }
             const div = document.createElement('div');
             div.className = 'list-item';
             div.onclick = () => openChat(r.id);
@@ -472,7 +538,7 @@
                 <div class="avatar" style="background:${generateGradient(r.name)}">${r.name[0]}</div>
                 <div class="list-info">
                     <div class="list-row-1"><div class="list-title">${r.name}</div></div>
-                    <div class="list-sub">${last ? (last.type==='img'?'Photo':last.txt) : 'New chat'}</div>
+                    <div class="list-sub">${prevTxt}</div>
                 </div>`;
             l.appendChild(div);
         });
